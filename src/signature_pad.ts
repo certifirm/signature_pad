@@ -196,7 +196,7 @@ export default class SignaturePad {
     return this._data;
   }
 
-  public toISOData(): object {
+  public toISOData(): any {
     if (this._isEmpty) {
         return {};
     }

@@ -10,9 +10,10 @@
 }(this, (function () { 'use strict';
 
     var Point = (function () {
-        function Point(x, y, time) {
+        function Point(x, y, p, time) {
             this.x = x;
             this.y = y;
+            this.p = p || 0;
             this.time = time || Date.now();
         }
         Point.prototype.distanceTo = function (start) {
@@ -143,18 +144,18 @@
             this.options = options;
             this._handleMouseDown = function (event) {
                 if (event.which === 1) {
-                    _this._mouseButtonDown = true;
+                    _this._drawningStroke = true;
                     _this._strokeBegin(event);
                 }
             };
             this._handleMouseMove = function (event) {
-                if (_this._mouseButtonDown) {
+                if (_this._drawningStroke) {
                     _this._strokeMoveUpdate(event);
                 }
             };
             this._handleMouseUp = function (event) {
-                if (event.which === 1 && _this._mouseButtonDown) {
-                    _this._mouseButtonDown = false;
+                if (event.which === 1 && _this._drawningStroke) {
+                    _this._drawningStroke = false;
                     _this._strokeEnd(event);
                 }
             };
@@ -176,6 +177,25 @@
                     event.preventDefault();
                     var touch = event.changedTouches[0];
                     _this._strokeEnd(touch);
+                }
+            };
+            this._handlePointerStart = function (event) {
+                _this._drawningStroke = true;
+                event.preventDefault();
+                _this._strokeBegin(event);
+            };
+            this._handlePointerMove = function (event) {
+                if (_this._drawningStroke) {
+                    event.preventDefault();
+                    _this._strokeMoveUpdate(event);
+                }
+            };
+            this._handlePointerEnd = function (event) {
+                _this._drawningStroke = false;
+                var wasCanvasTouched = event.target === _this.canvas;
+                if (wasCanvasTouched) {
+                    event.preventDefault();
+                    _this._strokeEnd(event);
                 }
             };
             this.velocityFilterWeight = options.velocityFilterWeight || 0.7;
@@ -243,7 +263,6 @@
         };
         SignaturePad.prototype.on = function () {
             this.canvas.style.touchAction = 'none';
-            this.canvas.style.msTouchAction = 'none';
             if (window.PointerEvent) {
                 this._handlePointerEvents();
             }
@@ -256,10 +275,9 @@
         };
         SignaturePad.prototype.off = function () {
             this.canvas.style.touchAction = 'auto';
-            this.canvas.style.msTouchAction = 'auto';
-            this.canvas.removeEventListener('pointerdown', this._handleMouseDown);
-            this.canvas.removeEventListener('pointermove', this._handleMouseMove);
-            document.removeEventListener('pointerup', this._handleMouseUp);
+            this.canvas.removeEventListener('pointerdown', this._handlePointerStart);
+            this.canvas.removeEventListener('pointermove', this._handlePointerMove);
+            document.removeEventListener('pointerup', this._handlePointerEnd);
             this.canvas.removeEventListener('mousedown', this._handleMouseDown);
             this.canvas.removeEventListener('mousemove', this._handleMouseMove);
             document.removeEventListener('mouseup', this._handleMouseUp);
@@ -285,6 +303,104 @@
         SignaturePad.prototype.toData = function () {
             return this._data;
         };
+        SignaturePad.prototype.toISOData = function () {
+            if (this._isEmpty) {
+                return {};
+            }
+            var previousPoint = this._data[0].points[0];
+            var isoData = {
+                "?xml": {
+                    "@version": "1.0",
+                    "@encoding": "utf-8"
+                },
+                SignatureSignTimeSeries: {
+                    "@xmlns": "http://standards.iso.org/iso-iec/19794/-7/ed-1/amd/1",
+                    "@xmlns:cmn": "http://standards.iso.org/iso-iec/19794/-1/ed-2/amd/2",
+                    "@xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+                    "@xsi:schemaLocation": "https://standards.iso.org/iso-iec/19794/-7/ed-2/amd/1/19794-7_ed2_amd1.xsd",
+                    "@cmn:SchemaVersion": "1.0",
+                    Version: {
+                        "cmn:Major": 2,
+                        "cmn:Minor": 0
+                    },
+                    RepresentationList: {
+                        Representation: {
+                            CaptureDateAndTime: new Date(previousPoint.time).toISOString(),
+                            CaptureDevice: {
+                                DeviceID: {
+                                    "cmn:Organization": 259,
+                                    "cmn:Identifier": 1
+                                },
+                                DeviceTechnology: "Electromagnetic"
+                            },
+                            QualityList: {
+                                "cmn:Quality": {
+                                    "cmn:Algorithm": {
+                                        "cmn:Organization": 259,
+                                        "cmn:Identifier": 1
+                                    },
+                                    "cmn:QualityCalculationFailed": null
+                                }
+                            },
+                            InclusionField: "6CC0",
+                            ChannelDescriptionList: {
+                                DTChannelDescription: {
+                                    ScalingValue: 1000
+                                }
+                            },
+                            SamplePointList: {
+                                SamplePoint: []
+                            }
+                        }
+                    },
+                    VendorSpecificData: {
+                        "cmn:TypeCode": 0,
+                        "cmn:Data": null
+                    }
+                }
+            };
+            var dpi = window.devicePixelRatio;
+            var previousIsoPoint = { x: 0, y: 0 };
+            var initX = 0;
+            var initY = 0;
+            for (var i = 0, length_1 = this._data.length; i < length_1; i++) {
+                for (var j = 0, innerLength = this._data[i].points.length; j < innerLength; j++) {
+                    var point = this._data[i].points[j];
+                    var isFirstPoint = (i === 0 && j === 0);
+                    if (isFirstPoint) {
+                        initX = point.x;
+                        initY = point.y;
+                    }
+                    var isoPoint = {
+                        x: (isFirstPoint) ? 0 : Math.round(((point.x - initX) * 25.4) / (96 * dpi)),
+                        y: (isFirstPoint) ? 0 : Math.round(((initY - point.y) * 25.4) / (96 * dpi)),
+                        dt: (isFirstPoint) ? 0 : point.time - previousPoint.time,
+                        vx: 0,
+                        vy: 0,
+                        p: Math.round(point.p * 65535)
+                    };
+                    isoPoint.vx = (isFirstPoint) ? 0 : Math.round((isoPoint.x - previousIsoPoint.x) / (isoPoint.dt / 1000));
+                    isoPoint.vy = (isFirstPoint) ? 0 : Math.round((isoPoint.y - previousIsoPoint.y) / (isoPoint.dt / 1000));
+                    var samplePoint = {
+                        PenTipCoord: {
+                            "cmn:X": isoPoint.x,
+                            "cmn:Y": isoPoint.y,
+                            "cmn:Z": 0
+                        },
+                        PenTipVelocity: {
+                            VelocityX: isoPoint.vx,
+                            VelocityY: isoPoint.vy
+                        },
+                        DTChannel: isoPoint.dt,
+                        FChannel: isoPoint.p
+                    };
+                    isoData.SignatureSignTimeSeries.RepresentationList.Representation.SamplePointList.SamplePoint.push(samplePoint);
+                    previousPoint = point;
+                    previousIsoPoint = isoPoint;
+                }
+            }
+            return isoData;
+        };
         SignaturePad.prototype._strokeBegin = function (event) {
             var newPointGroup = {
                 color: this.penColor,
@@ -304,7 +420,8 @@
             }
             var x = event.clientX;
             var y = event.clientY;
-            var point = this._createPoint(x, y);
+            var p = event.pressure !== undefined ? event.pressure : event.force !== undefined ? event.force : 0;
+            var point = this._createPoint(x, y, p);
             var lastPointGroup = this._data[this._data.length - 1];
             var lastPoints = lastPointGroup.points;
             var lastPoint = lastPoints.length > 0 && lastPoints[lastPoints.length - 1];
@@ -323,7 +440,8 @@
                 lastPoints.push({
                     time: point.time,
                     x: point.x,
-                    y: point.y
+                    y: point.y,
+                    p: point.p
                 });
             }
         };
@@ -334,13 +452,13 @@
             }
         };
         SignaturePad.prototype._handlePointerEvents = function () {
-            this._mouseButtonDown = false;
-            this.canvas.addEventListener('pointerdown', this._handleMouseDown);
-            this.canvas.addEventListener('pointermove', this._handleMouseMove);
-            document.addEventListener('pointerup', this._handleMouseUp);
+            this._drawningStroke = false;
+            this.canvas.addEventListener('pointerdown', this._handlePointerStart);
+            this.canvas.addEventListener('pointermove', this._handlePointerMove);
+            document.addEventListener('pointerup', this._handlePointerEnd);
         };
         SignaturePad.prototype._handleMouseEvents = function () {
-            this._mouseButtonDown = false;
+            this._drawningStroke = false;
             this.canvas.addEventListener('mousedown', this._handleMouseDown);
             this.canvas.addEventListener('mousemove', this._handleMouseMove);
             document.addEventListener('mouseup', this._handleMouseUp);
@@ -356,9 +474,9 @@
             this._lastWidth = (this.minWidth + this.maxWidth) / 2;
             this._ctx.fillStyle = this.penColor;
         };
-        SignaturePad.prototype._createPoint = function (x, y) {
+        SignaturePad.prototype._createPoint = function (x, y, p) {
             var rect = this.canvas.getBoundingClientRect();
-            return new Point(x - rect.left, y - rect.top, new Date().getTime());
+            return new Point(x - rect.left, y - rect.top, p, new Date().getTime());
         };
         SignaturePad.prototype._addPoint = function (point) {
             var _lastPoints = this._lastPoints;
